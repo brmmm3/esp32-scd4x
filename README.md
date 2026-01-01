@@ -39,7 +39,7 @@ The typical communication sequence between the I2C master (e.g., an ESP32 microc
 ```
 scd4x_start_periodic_measurement();
 
-scd4x_sensors_values_t sensors_values = {
+scd4x_values_t sensors_values = {
     .co2 = 0x00,
     .temperature = 0x00,
     .humidity = 0x00

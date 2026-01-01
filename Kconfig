@@ -1,0 +1,14 @@
+menu "SCD4x Options"
+    config SCD4X_I2C_CLK_SPEED_HZ
+        int "I2C Clock Speed (Hz)"
+        default 100000
+        range 1000 400000
+        help
+            Set the I2C clock speed in Hz. Only applies to the new I2C Master driver.
+
+    config SCD4X_TIMEOUT
+        int "Read/Write Timeout"
+        default 50
+        help
+            Number of ticks to wait for I2C read/write operations.
+endmenu
