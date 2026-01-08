@@ -62,7 +62,7 @@ typedef struct scd4x_sensor_value {
     uint8_t crc;
 } scd4x_sensor_value_t;
 
-typedef struct scd4x_sensors_values {
+typedef struct __attribute__((packed)) scd4x_sensors_values {
     uint16_t co2;
     float temperature;
     float humidity;
@@ -100,13 +100,13 @@ scd4x_t *sensor_create_master(i2c_master_bus_handle_t bus_handle);
 
 esp_err_t scd4x_device_create(scd4x_t *sensor_ptr);
 
-esp_err_t scd4x_device_init_do(scd4x_t *sensor);
+esp_err_t scd4x_init_do(scd4x_t *sensor, bool low_power);
 
-esp_err_t scd4x_device_init(scd4x_t** sensor_ptr, i2c_master_bus_handle_t bus_handle);
+esp_err_t scd4x_init(scd4x_t** sensor_ptr, i2c_master_bus_handle_t bus_handle);
 
 void scd4x_close(scd4x_t *sensor);
 
-esp_err_t scd4x_init(scd4x_t *sensor);
+esp_err_t scd4x_device_init(scd4x_t *sensor);
 
 esp_err_t scd4x_probe(scd4x_t *sensor);
 
@@ -162,7 +162,7 @@ esp_err_t scd4x_power_down(scd4x_t *sensor);
 
 esp_err_t scd4x_wake_up(scd4x_t *sensor);
 
-void scd4x_dump(scd4x_t *sensor);;
+void scd4x_dump_values(scd4x_t *sensor, bool force);
 
 #ifdef __cplusplus
 };

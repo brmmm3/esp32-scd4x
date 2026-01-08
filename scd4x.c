@@ -24,10 +24,8 @@
 #include "scd4x.h"
 #include "util.h"
 
-#include <stdlib.h>
 #include <string.h>
 #include "math.h"
-#include "esp_log_level.h"
 #include "esp_log.h"
 #include "esp_err.h"
 
@@ -65,7 +63,8 @@ uint8_t wake_up[]                                = {0x36, 0xF6};
 
 scd4x_t *scd4x_create_master(i2c_master_bus_handle_t bus_handle)
 {
-    scd4x_t *sensor = calloc(1, sizeof(scd4x_t));
+    scd4x_t *sensor = pvPortMalloc(sizeof(scd4x_t));
+    memset(sensor, 0, sizeof(scd4x_t));
 
     if (sensor != NULL) {
         sensor->bus_handle = bus_handle;
@@ -101,7 +100,7 @@ esp_err_t scd4x_device_create(scd4x_t *sensor)
     }
 }
 
-esp_err_t scd4x_device_init_do(scd4x_t *sensor)
+esp_err_t scd4x_init_do(scd4x_t *sensor, bool low_power)
 {
     esp_err_t err;
 
@@ -109,7 +108,7 @@ esp_err_t scd4x_device_init_do(scd4x_t *sensor)
     vTaskDelay(pdMS_TO_TICKS(10));
     if ((err = scd4x_wake_up(sensor)) != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(10));
-    if ((err = scd4x_init(sensor)) != ESP_OK) return err;
+    if ((err = scd4x_device_init(sensor)) != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(10));
     // Disable auto calibration
     if ((err = scd4x_set_automatic_self_calibration_enabled(sensor, false)) != ESP_OK) return err;
@@ -117,10 +116,13 @@ esp_err_t scd4x_device_init_do(scd4x_t *sensor)
     //if ((err = scd4x_measure_single_shot(sensor)) != ESP_OK) return err;
     //vTaskDelay(pdMS_TO_TICKS(10));
     sensor->enabled = true;
+    if (low_power) {
+        return scd4x_start_low_power_periodic_measurement(sensor);
+    }
     return scd4x_start_periodic_measurement(sensor);
 }
 
-esp_err_t scd4x_device_init(scd4x_t **sensor_ptr, i2c_master_bus_handle_t bus_handle)
+esp_err_t scd4x_init(scd4x_t **sensor_ptr, i2c_master_bus_handle_t bus_handle)
 {
     scd4x_t *sensor = NULL;
     esp_err_t err;
@@ -133,7 +135,7 @@ esp_err_t scd4x_device_init(scd4x_t **sensor_ptr, i2c_master_bus_handle_t bus_ha
     }
     if ((err = scd4x_device_create(sensor)) != ESP_OK) return err;
     for (int i = 0; i < 5; i++) {
-        if ((err = scd4x_device_init_do(sensor)) == ESP_OK) {
+        if ((err = scd4x_init_do(sensor, false)) == ESP_OK) {
             *sensor_ptr = sensor;
             return ESP_OK;
         }
@@ -148,10 +150,10 @@ void scd4x_close(scd4x_t *sensor)
     if (sensor != NULL && sensor->dev_handle != NULL)
         i2c_master_bus_rm_device(sensor->dev_handle);
     #endif
-    free(sensor);
+    vPortFree(sensor);
 }
 
-esp_err_t scd4x_init(scd4x_t *sensor)
+esp_err_t scd4x_device_init(scd4x_t *sensor)
 {
     esp_err_t err;
 
@@ -586,12 +588,12 @@ esp_err_t scd4x_wake_up(scd4x_t *sensor) {
     return scd4x_send_command(sensor, wake_up);
 }
 
-void scd4x_dump(scd4x_t *sensor)
+void scd4x_dump_values(scd4x_t *sensor, bool force)
 {
-    scd4x_values_t *values = &sensor->values;
+    if (force || sensor->debug & 1) {
+        scd4x_values_t *values = &sensor->values;
 
-    if (sensor->debug & 1) {
-        ESP_LOGI(TAG, "temp_offs=%f °C  altitude=%d m  pressure=%d hPa * co2=%d ppm  temp=%f °C  hum=%f %%",
+        ESP_LOGI(TAG, "temp_offs=%f °C  altitude=%d m  pressure=%d hPa * co2=%d ppm  temp=%.1f °C  hum=%.1f %%",
                  sensor->temperature_offset, sensor->altitude, sensor->pressure,
                  values->co2, values->temperature, values->humidity);
     }
