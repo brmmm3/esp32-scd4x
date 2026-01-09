@@ -52,6 +52,9 @@ extern "C" {
 #define CRC8_POLYNOMIAL             (0x31)
 #define CRC8_INIT                   (0xFF)
 
+// Commands for state machine
+#define SCD4X_CMD_FRC   0x362F
+
 typedef struct scd4x_msb_lsb {
     uint8_t msb;
     uint8_t lsb;
@@ -96,6 +99,8 @@ typedef struct scd4x_t {
     uint8_t debug;
 } scd4x_t;
 
+extern uint8_t scd4x_st_machine_status;
+
 scd4x_t *sensor_create_master(i2c_master_bus_handle_t bus_handle);
 
 esp_err_t scd4x_device_create(scd4x_t *sensor_ptr);
@@ -116,7 +121,7 @@ esp_err_t scd4x_read(scd4x_t *sensor, uint8_t *hex_code, uint8_t *measurements, 
 
 esp_err_t scd4x_write(scd4x_t *sensor, uint8_t *hex_code, uint8_t *measurements, uint8_t size);
 
-esp_err_t scd4x_send_command_and_fetch_result(scd4x_t *sensor, uint8_t *command, uint8_t *measurements, uint8_t size);
+esp_err_t scd4x_send_command_and_fetch_result(scd4x_t *sensor, uint8_t *command, uint8_t *measurements, uint8_t size, uint16_t wait);
 
 esp_err_t scd4x_start_periodic_measurement(scd4x_t *sensor);
 
@@ -161,6 +166,10 @@ esp_err_t scd4x_measure_single_shot_rht_only(scd4x_t *sensor);
 esp_err_t scd4x_power_down(scd4x_t *sensor);
 
 esp_err_t scd4x_wake_up(scd4x_t *sensor);
+
+void scd4x_state_machine_cmd(uint16_t cmd, uint32_t arg);
+
+int scd4x_state_machine(scd4x_t *sensor);
 
 void scd4x_dump_values(scd4x_t *sensor, bool force);
 
