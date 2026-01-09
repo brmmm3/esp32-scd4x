@@ -23,7 +23,7 @@
 
 #include "scd4x.h"
 #include "util.h"
-
+#include "time.h"
 #include <string.h>
 #include "math.h"
 #include "esp_log.h"
@@ -37,28 +37,41 @@ typedef struct measurements {
     scd4x_sensor_value_t humidity;
 } measurements_t;
 
-uint8_t start_periodic_measurement[]             = {0x21, 0xB1};
-uint8_t read_measurement[]                       = {0xEC, 0x05};
-uint8_t stop_periodic_measurement[]              = {0x3F, 0x86};
-uint8_t set_temperature_offset[]                 = {0x24, 0x1D};
-uint8_t get_temperature_offset[]                 = {0x23, 0x18};
-uint8_t set_sensor_altitude[]                    = {0x24, 0x27};
-uint8_t get_sensor_altitude[]                    = {0x23, 0x22};
-uint8_t set_ambient_pressure[]                   = {0xE0, 0x00};
-uint8_t perform_forced_recalibration[]           = {0x36, 0x2F};
-uint8_t set_automatic_self_calibration_enabled[] = {0x24, 0x16};
-uint8_t get_automatic_self_calibration_enabled[] = {0x23, 0x13};
-uint8_t start_low_power_periodic_measurement[]   = {0x21, 0xAC};
-uint8_t get_data_ready_status[]                  = {0xE4, 0xB8};
-uint8_t persist_settings[]                       = {0x36, 0x15};
-uint8_t get_serial_number[]                      = {0x36, 0x82};
-uint8_t perform_self_test[]                      = {0x36, 0x39};
-uint8_t perfom_factory_reset[]                   = {0x36, 0x32};
-uint8_t reinit[]                                 = {0x36, 0x46};
-uint8_t measure_single_shot[]                    = {0x21, 0x9D};
-uint8_t measure_single_shot_rht_only[]           = {0x21, 0x96};
-uint8_t power_down[]                             = {0x36, 0xE0};
-uint8_t wake_up[]                                = {0x36, 0xF6};
+#define SCD4X_ST_IDLE           0   /* Measurement stopped */
+#define SCD4X_ST_MEASURE        1   /* Periodic measurement */
+#define SCD4X_ST_MEASURE_3MIN   2   /* periodic measurement for >3min */
+#define SCD4X_ST_FRC_INIT       3   /* Init forced recalibration */
+#define SCD4X_ST_FRC_RUN        4   /* Run forced recalibration */
+#define SCD4X_ST_FRC_FINI       5   /* Finish forced recalibration */
+
+// State machine status
+uint8_t scd4x_st_machine_status = SCD4X_ST_IDLE;
+static time_t st_machine_time = 0;
+static uint16_t st_machine_cmd = 0;
+static uint32_t st_machine_arg = 0;
+
+static uint8_t start_periodic_measurement[]             = {0x21, 0xB1};
+static uint8_t read_measurement[]                       = {0xEC, 0x05};
+static uint8_t stop_periodic_measurement[]              = {0x3F, 0x86};
+static uint8_t set_temperature_offset[]                 = {0x24, 0x1D};
+static uint8_t get_temperature_offset[]                 = {0x23, 0x18};
+static uint8_t set_sensor_altitude[]                    = {0x24, 0x27};
+static uint8_t get_sensor_altitude[]                    = {0x23, 0x22};
+static uint8_t set_ambient_pressure[]                   = {0xE0, 0x00};
+static uint8_t perform_forced_recalibration[]           = {0x36, 0x2F};
+static uint8_t set_automatic_self_calibration_enabled[] = {0x24, 0x16};
+static uint8_t get_automatic_self_calibration_enabled[] = {0x23, 0x13};
+static uint8_t start_low_power_periodic_measurement[]   = {0x21, 0xAC};
+static uint8_t get_data_ready_status[]                  = {0xE4, 0xB8};
+static uint8_t persist_settings[]                       = {0x36, 0x15};
+static uint8_t get_serial_number[]                      = {0x36, 0x82};
+static uint8_t perform_self_test[]                      = {0x36, 0x39};
+static uint8_t perfom_factory_reset[]                   = {0x36, 0x32};
+static uint8_t reinit[]                                 = {0x36, 0x46};
+static uint8_t measure_single_shot[]                    = {0x21, 0x9D};
+static uint8_t measure_single_shot_rht_only[]           = {0x21, 0x96};
+static uint8_t power_down[]                             = {0x36, 0xE0};
+static uint8_t wake_up[]                                = {0x36, 0xF6};
 
 
 scd4x_t *scd4x_create_master(i2c_master_bus_handle_t bus_handle)
@@ -116,6 +129,8 @@ esp_err_t scd4x_init_do(scd4x_t *sensor, bool low_power)
     //if ((err = scd4x_measure_single_shot(sensor)) != ESP_OK) return err;
     //vTaskDelay(pdMS_TO_TICKS(10));
     sensor->enabled = true;
+    scd4x_st_machine_status = SCD4X_ST_MEASURE;
+    st_machine_time = time(NULL);
     if (low_power) {
         return scd4x_start_low_power_periodic_measurement(sensor);
     }
@@ -261,14 +276,14 @@ esp_err_t scd4x_write(scd4x_t *sensor, uint8_t *addr, uint8_t *din, uint8_t size
 * Hence, it is required to wait the command execution time before issuing the read header.
 * Commands must not be sent while a previous command is being processed.
 */
-esp_err_t scd4x_send_command_and_fetch_result(scd4x_t *sensor, uint8_t *command, uint8_t *measurements, uint8_t size) {
+esp_err_t scd4x_send_command_and_fetch_result(scd4x_t *sensor, uint8_t *command, uint8_t *measurements, uint8_t size, uint16_t wait) {
     esp_err_t err;
 
     err = i2c_master_transmit(sensor->dev_handle, command, 2, CONFIG_SCD4X_TIMEOUT);
     if (err != ESP_OK) return err;
     err = i2c_master_transmit(sensor->dev_handle, measurements, size, -1);
     if (err != ESP_OK) return err;
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    vTaskDelay(pdMS_TO_TICKS(wait));
     return i2c_master_receive(sensor->dev_handle, measurements, size, -1);
 }
 
@@ -412,7 +427,7 @@ uint16_t scd4x_perform_forced_recalibration(scd4x_t *sensor, uint16_t target_con
     };
     co2_concentration.crc = scd4x_calc_cksum((uint8_t *) &co2_concentration.value, sizeof(co2_concentration.value));
 
-    esp_err_t err = scd4x_send_command_and_fetch_result(sensor, perform_forced_recalibration, (uint8_t *)&co2_concentration, sizeof(co2_concentration));
+    esp_err_t err = scd4x_send_command_and_fetch_result(sensor, perform_forced_recalibration, (uint8_t *)&co2_concentration, sizeof(co2_concentration), 450);
 
     if (err != ESP_OK || (co2_concentration.value.msb = 0xFF && co2_concentration.value.lsb == 0xFF)) {
         ESP_LOGE(TAG, "perform_forced_recalibration failed with status code: %s", esp_err_to_name(err));
@@ -576,6 +591,7 @@ esp_err_t scd4x_measure_single_shot_rht_only(scd4x_t *sensor) {
 */
 esp_err_t scd4x_power_down(scd4x_t *sensor) {
     sensor->enabled = false;
+    scd4x_st_machine_status = SCD4X_ST_IDLE;
     return scd4x_send_command(sensor, power_down);
 }
 
@@ -586,6 +602,56 @@ esp_err_t scd4x_power_down(scd4x_t *sensor) {
 */
 esp_err_t scd4x_wake_up(scd4x_t *sensor) {
     return scd4x_send_command(sensor, wake_up);
+}
+
+void scd4x_state_machine_cmd(uint16_t cmd, uint32_t arg)
+{
+    st_machine_cmd = cmd;
+    st_machine_arg = arg;
+}
+
+/* Return 0 for idle, 1 for busy and -1 for error */
+int scd4x_state_machine(scd4x_t *sensor)
+{
+    time_t now = time(NULL);
+    esp_err_t err;
+
+    if (scd4x_st_machine_status == SCD4X_ST_MEASURE) {
+        if (now - st_machine_time > 180) {
+            ESP_LOGI(TAG, "SCD4x is measuring for >3min");
+            scd4x_st_machine_status = SCD4X_ST_MEASURE_3MIN;
+        }
+    } else if (scd4x_st_machine_status == SCD4X_ST_FRC_INIT) {
+        if (now - st_machine_time > 0) {
+            ESP_LOGI(TAG, "SCD4x forced recalibration run");
+            uint16_t result = scd4x_perform_forced_recalibration(sensor, st_machine_arg);
+            if (result == 0xffff) {
+                ESP_LOGE(TAG, "Failed to calibrate sensor");
+                if ((err = scd4x_start_periodic_measurement(sensor)) != ESP_OK) return -1;
+                scd4x_st_machine_status = SCD4X_ST_MEASURE;
+                st_machine_time = now;
+                return -1;
+            }
+            scd4x_st_machine_status = SCD4X_ST_FRC_RUN;
+            st_machine_time = now;
+        }
+    } else if (scd4x_st_machine_status == SCD4X_ST_FRC_RUN) {
+        if (now - st_machine_time > 0) {
+            if ((err = scd4x_start_periodic_measurement(sensor)) != ESP_OK) return -1;
+            ESP_LOGI(TAG, "SCD4x forced recalibration finished");
+            scd4x_st_machine_status = SCD4X_ST_MEASURE;
+            st_machine_time = now;
+        }
+    }
+    if (st_machine_cmd == SCD4X_CMD_FRC) {
+        st_machine_cmd = 0;
+        if (scd4x_st_machine_status == SCD4X_ST_MEASURE) return -1;
+        if ((err = scd4x_stop_periodic_measurement(sensor)) != ESP_OK) return -1;
+        ESP_LOGI(TAG, "SCD4x forced recalibration init");
+        scd4x_st_machine_status = SCD4X_ST_FRC_INIT;
+        st_machine_time = now;
+    }
+    return scd4x_st_machine_status != SCD4X_ST_IDLE ? 1 : 0;
 }
 
 void scd4x_dump_values(scd4x_t *sensor, bool force)
