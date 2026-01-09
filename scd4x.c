@@ -590,6 +590,7 @@ esp_err_t scd4x_measure_single_shot_rht_only(scd4x_t *sensor) {
 * sensor in power-cycled single shot mode.
 */
 esp_err_t scd4x_power_down(scd4x_t *sensor) {
+    if (sensor == NULL) return ESP_FAIL;
     sensor->enabled = false;
     scd4x_st_machine_status = SCD4X_ST_IDLE;
     return scd4x_send_command(sensor, power_down);
