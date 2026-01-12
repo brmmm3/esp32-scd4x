@@ -52,8 +52,18 @@ extern "C" {
 #define CRC8_POLYNOMIAL             (0x31)
 #define CRC8_INIT                   (0xFF)
 
+// Status for state machine
+
+#define SCD4X_ST_IDLE           0   /* Measurement stopped */
+#define SCD4X_ST_MEASURE        1   /* Periodic measurement */
+#define SCD4X_ST_MEASURE_3MIN   2   /* periodic measurement for >3min */
+#define SCD4X_ST_FRC_INIT       3   /* Init forced recalibration */
+#define SCD4X_ST_FRC_RUN        4   /* Run forced recalibration */
+#define SCD4X_ST_FRC_FINI       5   /* Finish forced recalibration */
+
 // Commands for state machine
 #define SCD4X_CMD_FRC   0x362F
+
 
 typedef struct scd4x_msb_lsb {
     uint8_t msb;
