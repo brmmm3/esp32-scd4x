@@ -75,7 +75,7 @@ typedef struct scd4x_sensor_value {
     uint8_t crc;
 } scd4x_sensor_value_t;
 
-typedef struct __attribute__((packed)) scd4x_sensors_values {
+typedef struct __attribute__((packed)) {
     uint16_t co2;
     float temperature;
     float humidity;
