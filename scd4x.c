@@ -169,7 +169,7 @@ esp_err_t scd4x_device_init(scd4x_t *sensor)
     // Give the sensor 10 ms delay to reset.
     vTaskDelay(pdMS_TO_TICKS(10));
     err = scd4x_get_serial_number(sensor);
-    ESP_LOGI(TAG, "Sensor serial number (err=%d) 0x%012llX", err, sensor->serial_number);
+    ESP_LOGI(TAG, "Sensor serial number (err=%u) 0x%012llX", err, sensor->serial_number);
     vTaskDelay(pdMS_TO_TICKS(10));
     sensor->temperature_offset = scd4x_get_temperature_offset(sensor);
     vTaskDelay(pdMS_TO_TICKS(10));
@@ -186,7 +186,7 @@ esp_err_t scd4x_device_init(scd4x_t *sensor)
             sensor->temperature_offset = scd4x_get_temperature_offset(sensor);
         }
         if (sensor->altitude != SENSOR_ALTITUDE) {
-            ESP_LOGW(TAG, "Sensor altitude calibration from %d m to %d m",
+            ESP_LOGW(TAG, "Sensor altitude calibration from %u m to %u m",
                      sensor->altitude, SENSOR_ALTITUDE);
             vTaskDelay(pdMS_TO_TICKS(10));
             ESP_ERROR_CHECK_WITHOUT_ABORT(scd4x_set_sensor_altitude(sensor, SENSOR_ALTITUDE));
@@ -195,7 +195,7 @@ esp_err_t scd4x_device_init(scd4x_t *sensor)
             vTaskDelay(pdMS_TO_TICKS(10));
             sensor->altitude = scd4x_get_sensor_altitude(sensor);
         }
-        ESP_LOGI(TAG, "Temperature offset %.1f °C - Sensor altitude %d m",
+        ESP_LOGI(TAG, "Temperature offset %.1f °C - Sensor altitude %u m",
                  sensor->temperature_offset, sensor->altitude);
     } else {
         ESP_LOGE(TAG, "Sensor offset/altitude read error!");
@@ -215,7 +215,7 @@ esp_err_t scd4x_probe(scd4x_t *sensor)
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Probing for SCD40/SCD41 success after %d tries", i);
+        ESP_LOGI(TAG, "Probing for SCD40/SCD41 success after %u tries", i);
     } else {
         ESP_LOGE(TAG, "Probing for SCD40/SCD41 failed");
     }
@@ -620,7 +620,7 @@ int scd4x_state_machine(scd4x_t *sensor)
         }
     } else if (scd4x_st_machine_status == SCD4X_ST_FRC_INIT) {
         if (now - st_machine_time > 0) {
-            ESP_LOGI(TAG, "SCD4x forced recalibration run with CO2 value %d", st_machine_arg);
+            ESP_LOGI(TAG, "SCD4x forced recalibration run with CO2 value %u", st_machine_arg);
             uint16_t result = scd4x_perform_forced_recalibration(sensor, st_machine_arg);
             if (result == 0xffff) {
                 ESP_LOGE(TAG, "Failed to calibrate sensor");
@@ -656,7 +656,7 @@ void scd4x_dump_values(scd4x_t *sensor, bool force)
     if (force || sensor->debug & 1) {
         scd4x_values_t *values = &sensor->values;
 
-        ESP_LOGI(TAG, "temp_offs=%f °C  altitude=%d m  pressure=%d hPa * co2=%d ppm  temp=%.1f °C  hum=%.1f %%",
+        ESP_LOGI(TAG, "temp_offs=%f °C  altitude=%u m  pressure=%u hPa * co2=%u ppm  temp=%.1f °C  hum=%.1f %%",
                  sensor->temperature_offset, sensor->altitude, sensor->pressure,
                  values->co2, values->temperature, values->humidity);
     }
