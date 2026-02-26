@@ -1,6 +1,6 @@
 /* MIT License
 *
-* Copyright (c) 2022 ma-lwa-re
+* Copyright (c) 2026 Martin Bammer
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -21,15 +21,16 @@
 * SOFTWARE.
 */
 
-#include "scd4x.h"
-#include "util.h"
-#include "time.h"
+#include <time.h>
 #include <string.h>
-#include "math.h"
-#include "esp_log.h"
-#include "esp_err.h"
+#include <math.h>
+#include <esp_log.h>
+#include <esp_err.h>
+#include "scd4x.h"
+#include "esp_log_level.h"
+#include "util.h"
 
-static const char *TAG = "SCD4X";
+static const char *TAG = "SCD41";
 
 typedef struct measurements {
     scd4x_sensor_value_t co2;
@@ -51,6 +52,7 @@ static uint8_t get_temperature_offset[]                 = {0x23, 0x18};
 static uint8_t set_sensor_altitude[]                    = {0x24, 0x27};
 static uint8_t get_sensor_altitude[]                    = {0x23, 0x22};
 static uint8_t set_ambient_pressure[]                   = {0xE0, 0x00};
+static uint8_t get_ambient_pressure[]                   = {0xE0, 0x00};
 static uint8_t perform_forced_recalibration[]           = {0x36, 0x2F};
 static uint8_t set_automatic_self_calibration_enabled[] = {0x24, 0x16};
 static uint8_t get_automatic_self_calibration_enabled[] = {0x23, 0x13};
@@ -66,6 +68,10 @@ static uint8_t measure_single_shot_rht_only[]           = {0x21, 0x96};
 static uint8_t power_down[]                             = {0x36, 0xE0};
 static uint8_t wake_up[]                                = {0x36, 0xF6};
 
+esp_err_t scd4x_get_temperature_offset_verbose(scd4x_t *sensor);
+esp_err_t scd4x_get_sensor_altitude_verbose(scd4x_t *sensor);
+esp_err_t scd4x_get_ambient_pressure_verbose(scd4x_t *sensor);
+
 
 scd4x_t *scd4x_create_master(i2c_master_bus_handle_t bus_handle)
 {
@@ -74,29 +80,25 @@ scd4x_t *scd4x_create_master(i2c_master_bus_handle_t bus_handle)
 
     if (sensor != NULL) {
         sensor->bus_handle = bus_handle;
-        sensor->dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+        sensor->dev_config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
         sensor->temperature_offset = 0.0;
-        sensor->altitude = 0.0;
         sensor->auto_adjust = 60;
     } else {
-        ESP_LOGE(TAG, "Failed to allocate memory for scd4x.");
+        ESP_LOGE(TAG, "Failed to allocate memory for SCD4x.");
         scd4x_close(sensor);
         return NULL;
     }
     return sensor;
 }
 
-/**
- * @param scd4x Driver Structure.
- */
 esp_err_t scd4x_device_create(scd4x_t *sensor)
 {
     ESP_LOGI(TAG, "device_create for SCD40/SCD41 sensors on ADDR %X", SCD4X_SENSOR_ADDR);
-    sensor->dev_cfg.device_address = SCD4X_SENSOR_ADDR;
-    sensor->dev_cfg.scl_speed_hz = CONFIG_SCD4X_I2C_CLK_SPEED_HZ;
-    sensor->dev_cfg.flags.disable_ack_check = true;
+    sensor->dev_config.device_address = SCD4X_SENSOR_ADDR;
+    sensor->dev_config.scl_speed_hz = CONFIG_SCD4X_I2C_CLK_SPEED_HZ;
+    sensor->dev_config.flags.disable_ack_check = true;
     // Add device to the I2C bus
-    esp_err_t err = i2c_master_bus_add_device(sensor->bus_handle, &sensor->dev_cfg, &sensor->dev_handle);
+    esp_err_t err = i2c_master_bus_add_device(sensor->bus_handle, &sensor->dev_config, &sensor->dev_handle);
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "device_create success on %X", SCD4X_SENSOR_ADDR);
         return err;
@@ -114,8 +116,9 @@ esp_err_t scd4x_init_do(scd4x_t *sensor, bool low_power)
     vTaskDelay(pdMS_TO_TICKS(10));
     if ((err = scd4x_wake_up(sensor)) != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(10));
+    if ((err = scd4x_stop_periodic_measurement(sensor)) != ESP_OK) return err;
+    vTaskDelay(pdMS_TO_TICKS(30));
     if ((err = scd4x_device_init(sensor)) != ESP_OK) return err;
-    vTaskDelay(pdMS_TO_TICKS(10));
     // Disable auto calibration
     if ((err = scd4x_set_automatic_self_calibration_enabled(sensor, false)) != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(10));
@@ -136,7 +139,7 @@ esp_err_t scd4x_init(scd4x_t **sensor_ptr, i2c_master_bus_handle_t bus_handle)
     ESP_LOGI(TAG, "Initialize SCD4x");
     sensor = scd4x_create_master(bus_handle);
     if (sensor == NULL) { 
-        ESP_LOGE(TAG, "Could not create scd4x driver.");
+        ESP_LOGE(TAG, "Could not create SCD4x driver.");
         return ESP_FAIL;
     }
     if ((err = scd4x_device_create(sensor)) != ESP_OK) return err;
@@ -145,7 +148,7 @@ esp_err_t scd4x_init(scd4x_t **sensor_ptr, i2c_master_bus_handle_t bus_handle)
             *sensor_ptr = sensor;
             return ESP_OK;
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
     return err;
 }
@@ -164,36 +167,31 @@ esp_err_t scd4x_device_init(scd4x_t *sensor)
     esp_err_t err;
 
     if (sensor == NULL) return ESP_ERR_INVALID_ARG;
-    err = scd4x_probe(sensor) || scd4x_reinit(sensor);
-    if (err != ESP_OK) return err;
-    // Give the sensor 10 ms delay to reset.
-    vTaskDelay(pdMS_TO_TICKS(10));
+    if ((err = scd4x_probe(sensor)) != ESP_OK) return err;
+    if ((err = scd4x_reinit(sensor)) != ESP_OK) return err;
     err = scd4x_get_serial_number(sensor);
     ESP_LOGI(TAG, "Sensor serial number (err=%u) 0x%012llX", err, sensor->serial_number);
-    vTaskDelay(pdMS_TO_TICKS(10));
-    sensor->temperature_offset = scd4x_get_temperature_offset(sensor);
-    vTaskDelay(pdMS_TO_TICKS(10));
-    sensor->altitude = scd4x_get_sensor_altitude(sensor);
+    scd4x_get_temperature_offset_verbose(sensor);
+    scd4x_get_sensor_altitude_verbose(sensor);
+    scd4x_get_ambient_pressure_verbose(sensor);
     if (sensor->temperature_offset != SCD4X_READ_ERROR && sensor->altitude != SCD4X_READ_ERROR) {
         if (sensor->temperature_offset != TEMPERATURE_OFFSET) {
             ESP_LOGW(TAG, "Temperature offset calibration from %.1f °C to %.1f °C",
                      sensor->temperature_offset, TEMPERATURE_OFFSET);
             vTaskDelay(pdMS_TO_TICKS(10));
             ESP_ERROR_CHECK_WITHOUT_ABORT(scd4x_set_temperature_offset(sensor, TEMPERATURE_OFFSET));
-            vTaskDelay(pdMS_TO_TICKS(10));
-            ESP_ERROR_CHECK_WITHOUT_ABORT(scd4x_persist_settings(sensor));
-            vTaskDelay(pdMS_TO_TICKS(10));
-            sensor->temperature_offset = scd4x_get_temperature_offset(sensor);
+            //vTaskDelay(pdMS_TO_TICKS(10));
+            //ESP_ERROR_CHECK_WITHOUT_ABORT(scd4x_persist_settings(sensor));
+            scd4x_get_temperature_offset_verbose(sensor);
         }
         if (sensor->altitude != SENSOR_ALTITUDE) {
             ESP_LOGW(TAG, "Sensor altitude calibration from %u m to %u m",
                      sensor->altitude, SENSOR_ALTITUDE);
             vTaskDelay(pdMS_TO_TICKS(10));
             ESP_ERROR_CHECK_WITHOUT_ABORT(scd4x_set_sensor_altitude(sensor, SENSOR_ALTITUDE));
-            vTaskDelay(pdMS_TO_TICKS(10));
-            ESP_ERROR_CHECK_WITHOUT_ABORT(scd4x_persist_settings(sensor));
-            vTaskDelay(pdMS_TO_TICKS(10));
-            sensor->altitude = scd4x_get_sensor_altitude(sensor);
+            //vTaskDelay(pdMS_TO_TICKS(10));
+            //ESP_ERROR_CHECK_WITHOUT_ABORT(scd4x_persist_settings(sensor));
+            scd4x_get_sensor_altitude_verbose(sensor);
         }
         ESP_LOGI(TAG, "Temperature offset %.1f °C - Sensor altitude %u m",
                  sensor->temperature_offset, sensor->altitude);
@@ -208,16 +206,16 @@ esp_err_t scd4x_probe(scd4x_t *sensor)
     esp_err_t err = ESP_OK;
     int i;
 
-    //ESP_LOGI(TAG, "Probing for SCD40/SCD41 sensor on I2C %X", sensor->dev_cfg.device_address);
-    for (i = 0; i < 5; i++) {
-        err = i2c_master_probe(sensor->bus_handle, sensor->dev_cfg.device_address, CONFIG_SCD4X_TIMEOUT);
+    //ESP_LOGI(TAG, "Probing for SCD40/SCD41 sensor on I2C %X", sensor->dev_config.device_address);
+    for (i = 0; i < 10; i++) {
+        err = i2c_master_probe(sensor->bus_handle, sensor->dev_config.device_address, CONFIG_SCD4X_TIMEOUT);
         if (err == ESP_OK) break;
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Probing for SCD40/SCD41 success after %u tries", i);
+        ESP_LOGI(TAG, "Probing for SCD40/SCD41 success after %u retries", i);
     } else {
-        ESP_LOGE(TAG, "Probing for SCD40/SCD41 failed");
+        ESP_LOGE(TAG, "Probing for SCD40/SCD41 failed with err=%d", err);
     }
     return err;
 }
@@ -276,6 +274,23 @@ esp_err_t scd4x_send_command_and_fetch_result(scd4x_t *sensor, uint8_t *command,
     if (err != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(wait));
     return i2c_master_receive(sensor->dev_handle, measurements, size, -1);
+}
+
+uint16_t scd4x_get_air_parameter(scd4x_t *sensor, uint8_t *command) {
+    uint8_t buf[3];
+    esp_err_t err;
+
+    for (int i = 0; i < 10; i++) {
+        if ((err = scd4x_read(sensor, command, buf, 3)) == ESP_OK) {
+            if (scd4x_is_data_valid(buf, 3)) return ((uint16_t)buf[0] << 8) | (uint16_t)buf[1];
+            if (i > 7)
+                ESP_LOGE(TAG, "scd4x_get_air_parameter returned invalid data: %02X%02X%02X", buf[0], buf[1], buf[2]);
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (err == ESP_OK) ESP_LOGE(TAG, "scd4x_get_air_parameter FAILED with invalid data");
+    else ESP_LOGE(TAG, "scd4x_get_air_parameter failed with status code: %s", esp_err_to_name(err));
+    return SCD4X_READ_ERROR;
 }
 
 /*
@@ -338,20 +353,25 @@ esp_err_t scd4x_set_temperature_offset(scd4x_t *sensor, float temperature) {
 /*
 * Getting the temperature offset of the SCD4x from the EEPROM.
 */
-float scd4x_get_temperature_offset(scd4x_t *sensor) {
-    uint8_t buf[3];
-    esp_err_t err;
+uint16_t scd4x_get_temperature_offset(scd4x_t *sensor) {
+    uint16_t value;
 
-    err = scd4x_read(sensor, get_temperature_offset, buf, 3);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "get_temperature_offset failed with status code: %s", esp_err_to_name(err));
-        return SCD4X_READ_ERROR;
+    if ((value = scd4x_get_air_parameter(sensor, get_temperature_offset)) != SCD4X_READ_ERROR) {
+        sensor->temperature_offset = round((175.0 * ((float)value / 65536.0)) * 10.0) / 10.0;
+        return value;
     }
-    if (!scd4x_is_data_valid(buf, 3)) {
-        ESP_LOGE(TAG, "get_temperature_offset returned invalid data: %02X%02X%02X", buf[0], buf[1], buf[2]);
-        return SCD4X_READ_ERROR;
-    }
-    return round((175.0 * ((float)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1]) / 65536.0)) * 10.0) / 10.0;
+    ESP_LOGE(TAG, "get_temperature_offset FAILED");
+    return SCD4X_READ_ERROR;
+}
+
+esp_err_t scd4x_get_temperature_offset_verbose(scd4x_t *sensor)
+{
+    uint16_t value = scd4x_get_temperature_offset(sensor);
+
+    vTaskDelay(pdMS_TO_TICKS(10));
+    if (value == SCD4X_READ_ERROR) return ESP_FAIL;
+    ESP_LOGI(TAG, "temperature_offset=%f °C", sensor->temperature_offset);
+    return ESP_OK;
 }
 
 /*
@@ -375,15 +395,24 @@ esp_err_t scd4x_set_sensor_altitude(scd4x_t *sensor, uint16_t altitude) {
 * Getting the sensor altitude of the SCD4x from the EEPROM.
 */
 uint16_t scd4x_get_sensor_altitude(scd4x_t *sensor) {
-    esp_err_t err;
-    uint8_t buf[3];
+    uint16_t value;
 
-    if ((err = scd4x_read(sensor, get_sensor_altitude, buf, 3)) != ESP_OK) {
-        ESP_LOGE(TAG, "get_sensor_altitude failed with status code: %s", esp_err_to_name(err));
-        return SCD4X_READ_ERROR;
+    if ((value = scd4x_get_air_parameter(sensor, get_sensor_altitude)) != SCD4X_READ_ERROR) {
+        sensor->altitude = value;
+        return value;
     }
-    sensor->altitude = ((uint16_t)buf[0] << 8) | (uint16_t)buf[1];
-    return sensor->altitude;
+    ESP_LOGE(TAG, "get_sensor_altitude FAILED");
+    return SCD4X_READ_ERROR;
+}
+
+esp_err_t scd4x_get_sensor_altitude_verbose(scd4x_t *sensor)
+{
+    uint16_t value = scd4x_get_sensor_altitude(sensor);
+
+    vTaskDelay(pdMS_TO_TICKS(10));
+    if (value == SCD4X_READ_ERROR) return ESP_FAIL;
+    ESP_LOGI(TAG, "altitude=%d m", sensor->altitude);
+    return ESP_OK;
 }
 
 /*
@@ -401,6 +430,30 @@ esp_err_t scd4x_set_ambient_pressure(scd4x_t *sensor, uint16_t pressure) {
     ambient_pressure.crc = scd4x_calc_cksum((uint8_t *)&ambient_pressure.value, sizeof(ambient_pressure.value));
     if ((err = scd4x_write(sensor, set_ambient_pressure, (uint8_t *)&ambient_pressure, sizeof(ambient_pressure))) != ESP_OK) return err;
     sensor->pressure = pressure;
+    return ESP_OK;
+}
+
+/*
+* Getting the sensor altitude of the SCD4x from the EEPROM.
+*/
+uint16_t scd4x_get_ambient_pressure(scd4x_t *sensor) {
+    uint16_t value;
+
+    if ((value = scd4x_get_air_parameter(sensor, get_ambient_pressure)) != SCD4X_READ_ERROR) {
+        sensor->pressure = value;
+        return value;
+    }
+    ESP_LOGE(TAG, "get_ambient_pressure FAILED");
+    return SCD4X_READ_ERROR;
+}
+
+esp_err_t scd4x_get_ambient_pressure_verbose(scd4x_t *sensor)
+{
+    uint16_t value = scd4x_get_ambient_pressure(sensor);
+
+    vTaskDelay(pdMS_TO_TICKS(10));
+    if (value == SCD4X_READ_ERROR) return ESP_FAIL;
+    ESP_LOGI(TAG, "pressure=%d", sensor->pressure);
     return ESP_OK;
 }
 
@@ -507,19 +560,24 @@ esp_err_t scd4x_persist_settings(scd4x_t *sensor) {
 * Together, the 3 words constitute a unique serial number with a length of 48 bits (big endian format).
 */
 esp_err_t scd4x_get_serial_number(scd4x_t *sensor) {
-    esp_err_t err;
+    esp_err_t err = ESP_OK;
     uint8_t buf[9]; // Serial number is 12 digits plus trailing NULL
 
     ESP_LOGI(TAG, "scd4x_get_serial_number");
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 10; i++) {
         err = scd4x_read(sensor, get_serial_number, (uint8_t *)&buf, sizeof(buf));
-        if (err == ESP_OK && scd4x_is_data_valid(buf, 9)) {
-            //ESP_LOG_BUFFER_HEXDUMP(TAG, buf, 9, ESP_LOG_INFO);
-            sensor->serial_number = (uint64_t)buf[0] << 40 | (uint64_t)buf[1] << 32 | (uint64_t)buf[3] << 24 | (uint64_t)buf[4] << 16 | (uint64_t)buf[6] << 8 | (uint64_t)buf[7];
-            return ESP_OK;
+        if (err == ESP_OK) {
+            if (scd4x_is_data_valid(buf, 9)) {
+                sensor->serial_number = (uint64_t)buf[0] << 40 | (uint64_t)buf[1] << 32 | (uint64_t)buf[3] << 24 | (uint64_t)buf[4] << 16 | (uint64_t)buf[6] << 8 | (uint64_t)buf[7];
+                return ESP_OK;
+            } else if (i > 7) {
+                ESP_LOGE(TAG, "Received serial number invalid. %d retries", i);
+                ESP_LOG_BUFFER_HEXDUMP(TAG, buf, 9, ESP_LOG_ERROR);
+            }
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
+    ESP_LOGE(TAG, "scd4x_get_serial_number FAILED with err=%d", err);
     return SCD4X_READ_ERROR;
 }
 
@@ -556,13 +614,20 @@ esp_err_t scd4x_perfom_factory_reset(scd4x_t *sensor) {
 * If the reinit command does not trigger the desired re-initialization, a power-cycle should be applied to the SCD4x.
 */
 esp_err_t scd4x_reinit(scd4x_t *sensor) {
+    esp_err_t err = ESP_OK;
+
     ESP_LOGI(TAG, "scd4x_reinit");
     for (int i = 0; i < 10; i++) {
-        esp_err_t err = scd4x_send_command(sensor, reinit);
-        if (err == ESP_OK) return err;
-        vTaskDelay(pdMS_TO_TICKS(10));
+        if ((err = scd4x_send_command(sensor, reinit)) == ESP_OK) {
+            // Give the sensor 50 ms delay to reset.
+            vTaskDelay(pdMS_TO_TICKS(50));
+            ESP_LOGI(TAG, "scd4x_reinit SUCCESS");
+            return ESP_OK;
+        }
+        vTaskDelay(pdMS_TO_TICKS(30));
     }
-    return ESP_OK; //scd4x_send_command(scd4x, reinit);
+    ESP_LOGE(TAG, "scd4x_reinit FAILED with err=%d", err);
+    return ESP_FAIL;
 }
 
 /* 

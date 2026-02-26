@@ -26,7 +26,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <limits.h>
@@ -34,7 +33,7 @@ extern "C" {
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/i2c_master.h"
-#include "esp_err.h"
+#include <esp_err.h>
 
 #define FAHRENHEIT(celcius)         (((celcius * 9.0) / 5.0) + 32.0)
 #define KELVIN(celcius)             (celcius + 273.15)
@@ -43,7 +42,7 @@ extern "C" {
 #define SCALE_KELVIN                ('K')
 
 #define TEMPERATURE_OFFSET          (4.0)
-#define SENSOR_ALTITUDE             (0)
+#define SENSOR_ALTITUDE             (275)
 
 #define SCD4X_SENSOR_ADDR           (0x62)
 #define SCD4X_READ_ERROR            (0xFFFF)
@@ -81,15 +80,12 @@ typedef struct __attribute__((packed)) {
     float humidity;
 } scd4x_values_t;
 
-/**
- * Anonymous structure to driver settings.
- */
-typedef struct scd4x_t {
+typedef struct scd4x_s {
     #if CONFIG_USE_I2C_MASTER_DRIVER
     // I2C master handle via port with configuration
     i2c_master_dev_handle_t dev_handle;
     // I2C master configuration
-    i2c_device_config_t dev_cfg;
+    i2c_device_config_t dev_config;
     // I2C master handle via port
     i2c_master_bus_handle_t bus_handle;
     #else
@@ -98,12 +94,13 @@ typedef struct scd4x_t {
     // Slave Address of sensor.
     uint8_t slave;
     #endif
+
+    scd4x_values_t values;
     // Serial number of sensor
     uint64_t serial_number;
     float temperature_offset;   // °C
     uint16_t altitude;          // m
     uint16_t pressure;          // hPa
-    scd4x_values_t values;
     uint8_t auto_adjust;
     bool enabled;
     uint8_t debug;
@@ -141,13 +138,15 @@ esp_err_t scd4x_stop_periodic_measurement(scd4x_t *sensor);
 
 esp_err_t scd4x_set_temperature_offset(scd4x_t *sensor, float temperature);
 
-float scd4x_get_temperature_offset(scd4x_t *sensor);
+uint16_t scd4x_get_temperature_offset(scd4x_t *sensor);
 
 esp_err_t scd4x_set_sensor_altitude(scd4x_t *sensor, uint16_t altitude);
 
 uint16_t scd4x_get_sensor_altitude(scd4x_t *sensor);
 
 esp_err_t scd4x_set_ambient_pressure(scd4x_t *sensor, uint16_t pressure);
+
+uint16_t scd4x_get_ambient_pressure(scd4x_t *sensor);
 
 uint16_t scd4x_perform_forced_recalibration(scd4x_t *sensor, uint16_t co2_concentration);
 

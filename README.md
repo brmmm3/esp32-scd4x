@@ -1,22 +1,27 @@
-# ESP32 SCD4x Library
+# ESP32 SCD4x Driver
+
 Implementation of the Sensirion SCD4x carbon dioxide, temperature, and relative humidity sensor. It enables developers to communicate with the SCD4x sensor on the ESP32 platform by only adapting the I2C communication channel.
 
 [<center><img src="images/SCD4x.png" width="300px"></center>](images/SCD4x.png)
 
 ## Config
+
 ### Select Features
+
 Edit the [`scd4x.h`](scd4x.h) header to select the GPIO used for the I2C interface.
-```
+
+```c
 #define I2C_MASTER_SDA      (GPIO_NUM_6)
 #define I2C_MASTER_SCL      (GPIO_NUM_7)
 ```
 
 #### Example
+
 The [`main.c`](main.c) file is an example of how you could use the SCD4x sensor family with an ESP32 microcontroller.
 
 Configure the I2C interface by setting the SDA and SCL GPIO, as well as buffer size and other optional settings.
 
-```
+```c
 i2c_config_t i2c_config = {
     .mode = I2C_MODE_MASTER,
     .sda_io_num = I2C_MASTER_SDA,
@@ -31,12 +36,13 @@ ESP_ERROR_CHECK(i2c_driver_install(I2C_MASTER_NUM, i2c_config.mode, I2C_MASTER_R
 ```
 
 The typical communication sequence between the I2C master (e.g., an ESP32 microcontroller) and the SCD4x sensor is as follows:
+
 1. The sensor is powered up
 2. The I2C master sends a start_periodic_measurement command. Signal update interval is 5 seconds.
 3. The I2C master periodically reads out data with the read measurement sequence.
 4. To put the sensor back to idle mode, the I2C master sends a stop periodic measurement command.
 
-```
+```c
 scd4x_start_periodic_measurement();
 
 scd4x_values_t sensors_values = {
