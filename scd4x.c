@@ -39,7 +39,7 @@ typedef struct measurements {
 } measurements_t;
 
 // State machine status
-uint8_t scd4x_st_machine_status = SCD4X_ST_IDLE;
+uint8_t scd41_st_machine_status = SCD4X_ST_IDLE;
 static time_t st_machine_time = 0;
 static uint16_t st_machine_cmd = 0;
 static uint32_t st_machine_arg = 0;
@@ -142,7 +142,10 @@ esp_err_t scd4x_init(scd4x_t **sensor_ptr, i2c_master_bus_handle_t bus_handle)
         ESP_LOGE(TAG, "Could not create SCD4x driver.");
         return ESP_FAIL;
     }
-    if ((err = scd4x_device_create(sensor)) != ESP_OK) return err;
+    if ((err = scd4x_device_create(sensor)) != ESP_OK) {
+        vPortFree(sensor);
+        return err;
+    }
     for (int i = 0; i < 5; i++) {
         if ((err = scd4x_init_do(sensor, false)) == ESP_OK) {
             *sensor_ptr = sensor;
@@ -150,6 +153,7 @@ esp_err_t scd4x_init(scd4x_t **sensor_ptr, i2c_master_bus_handle_t bus_handle)
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
+    vPortFree(sensor);
     return err;
 }
 
@@ -297,7 +301,7 @@ uint16_t scd4x_get_air_parameter(scd4x_t *sensor, uint8_t *command) {
 * Start periodic measurement, signal update interval is 5 seconds.
 */
 esp_err_t scd4x_start_periodic_measurement(scd4x_t *sensor) {
-    scd4x_st_machine_status = SCD4X_ST_MEASURE;
+    scd41_st_machine_status = SCD4X_ST_MEASURE;
     st_machine_time = time(NULL);
     return scd4x_send_command(sensor, start_periodic_measurement);
 }
@@ -317,8 +321,8 @@ esp_err_t scd4x_read_measurement(scd4x_t *sensor) {
     if (!scd4x_get_data_ready_status(sensor)) return ESP_FAIL;
     err = scd4x_read(sensor, read_measurement, (uint8_t *) &measurements, sizeof(measurements));
     sensor->values.co2 = (measurements.co2.value.msb << 8) + measurements.co2.value.lsb;
-    sensor->values.temperature = (175.0 * (((measurements.temperature.value.msb << 8) + measurements.temperature.value.lsb) / 65535.0)) - 45.0;
-    sensor->values.humidity = 100.0 * ((measurements.humidity.value.msb << 8) + measurements.humidity.value.lsb) / 65535.0;
+    sensor->values.temperature = (int16_t)(10.0 * ((175.0 * (((measurements.temperature.value.msb << 8) + measurements.temperature.value.lsb) / 65535.0)) - 45.0));
+    sensor->values.humidity = (uint16_t)(100.0 * ((measurements.humidity.value.msb << 8) + measurements.humidity.value.lsb) / 65535.0);
     return err;
 }
 
@@ -327,7 +331,7 @@ esp_err_t scd4x_read_measurement(scd4x_t *sensor) {
 * respond to other commands after waiting 500 ms after issuing the stop_periodic_measurement command.
 */
 esp_err_t scd4x_stop_periodic_measurement(scd4x_t *sensor) {
-    scd4x_st_machine_status = SCD4X_ST_IDLE;
+    scd41_st_machine_status = SCD4X_ST_IDLE;
     return scd4x_send_command(sensor, stop_periodic_measurement);
 }
 
@@ -518,7 +522,7 @@ bool scd4x_get_automatic_self_calibration_enabled(scd4x_t *sensor) {
 * start low power periodic measurement, signal update interval is approximately 30 seconds.
 */
 esp_err_t scd4x_start_low_power_periodic_measurement(scd4x_t *sensor) {
-    scd4x_st_machine_status = SCD4X_ST_MEASURE;
+    scd41_st_machine_status = SCD4X_ST_MEASURE;
     st_machine_time = time(NULL);
     return scd4x_send_command(sensor, start_low_power_periodic_measurement);
 }
@@ -653,7 +657,7 @@ esp_err_t scd4x_measure_single_shot_rht_only(scd4x_t *sensor) {
 esp_err_t scd4x_power_down(scd4x_t *sensor) {
     if (sensor == NULL) return ESP_FAIL;
     sensor->enabled = false;
-    scd4x_st_machine_status = SCD4X_ST_IDLE;
+    scd41_st_machine_status = SCD4X_ST_IDLE;
     return scd4x_send_command(sensor, power_down);
 }
 
@@ -678,42 +682,42 @@ int scd4x_state_machine(scd4x_t *sensor)
     time_t now = time(NULL);
     esp_err_t err;
 
-    if (scd4x_st_machine_status == SCD4X_ST_MEASURE) {
+    if (scd41_st_machine_status == SCD4X_ST_MEASURE) {
         if (now - st_machine_time > 180) {
             ESP_LOGI(TAG, "SCD4x is measuring for >3min");
-            scd4x_st_machine_status = SCD4X_ST_MEASURE_3MIN;
+            scd41_st_machine_status = SCD4X_ST_MEASURE_3MIN;
         }
-    } else if (scd4x_st_machine_status == SCD4X_ST_FRC_INIT) {
+    } else if (scd41_st_machine_status == SCD4X_ST_FRC_INIT) {
         if (now - st_machine_time > 0) {
             ESP_LOGI(TAG, "SCD4x forced recalibration run with CO2 value %u", st_machine_arg);
             uint16_t result = scd4x_perform_forced_recalibration(sensor, st_machine_arg);
             if (result == 0xffff) {
                 ESP_LOGE(TAG, "Failed to calibrate sensor");
                 if ((err = scd4x_start_periodic_measurement(sensor)) != ESP_OK) return -1;
-                scd4x_st_machine_status = SCD4X_ST_MEASURE;
+                scd41_st_machine_status = SCD4X_ST_MEASURE;
                 st_machine_time = now;
                 return -1;
             }
-            scd4x_st_machine_status = SCD4X_ST_FRC_RUN;
+            scd41_st_machine_status = SCD4X_ST_FRC_RUN;
             st_machine_time = now;
         }
-    } else if (scd4x_st_machine_status == SCD4X_ST_FRC_RUN) {
+    } else if (scd41_st_machine_status == SCD4X_ST_FRC_RUN) {
         if (now - st_machine_time > 0) {
             if ((err = scd4x_start_periodic_measurement(sensor)) != ESP_OK) return -1;
             ESP_LOGI(TAG, "SCD4x forced recalibration finished");
-            scd4x_st_machine_status = SCD4X_ST_MEASURE;
+            scd41_st_machine_status = SCD4X_ST_MEASURE;
             st_machine_time = now;
         }
     }
     if (st_machine_cmd == SCD4X_CMD_FRC) {
         st_machine_cmd = 0;
-        if (scd4x_st_machine_status == SCD4X_ST_MEASURE) return -1;
+        if (scd41_st_machine_status == SCD4X_ST_MEASURE) return -1;
         if ((err = scd4x_stop_periodic_measurement(sensor)) != ESP_OK) return -1;
         ESP_LOGI(TAG, "SCD4x forced recalibration init");
-        scd4x_st_machine_status = SCD4X_ST_FRC_INIT;
+        scd41_st_machine_status = SCD4X_ST_FRC_INIT;
         st_machine_time = now;
     }
-    return scd4x_st_machine_status != SCD4X_ST_IDLE ? 1 : 0;
+    return scd41_st_machine_status != SCD4X_ST_IDLE ? 1 : 0;
 }
 
 void scd4x_dump_values(scd4x_t *sensor, bool force)
@@ -721,8 +725,8 @@ void scd4x_dump_values(scd4x_t *sensor, bool force)
     if (force || sensor->debug & 1) {
         scd4x_values_t *values = &sensor->values;
 
-        ESP_LOGI(TAG, "temp_offs=%f °C  altitude=%u m  pressure=%u hPa * co2=%u ppm  temp=%.1f °C  hum=%.1f %%",
+        ESP_LOGI(TAG, "temp_offs=%.1f °C  altitude=%u m  pressure=%u hPa * co2=%u ppm  temp=%.1f °C  hum=%d %%",
                  sensor->temperature_offset, sensor->altitude, sensor->pressure,
-                 values->co2, values->temperature, values->humidity);
+                 values->co2, 0.1 * (float)values->temperature, values->humidity);
     }
 }

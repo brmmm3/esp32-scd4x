@@ -75,9 +75,9 @@ typedef struct scd4x_sensor_value {
 } scd4x_sensor_value_t;
 
 typedef struct __attribute__((packed)) {
-    uint16_t co2;
-    float temperature;
-    float humidity;
+    uint16_t co2; // ppm
+    int16_t temperature; // 0.1 * temperature = °C
+    uint16_t humidity;   // %
 } scd4x_values_t;
 
 typedef struct scd4x_s {
@@ -106,7 +106,7 @@ typedef struct scd4x_s {
     uint8_t debug;
 } scd4x_t;
 
-extern uint8_t scd4x_st_machine_status;
+extern uint8_t scd41_st_machine_status;
 
 scd4x_t *sensor_create_master(i2c_master_bus_handle_t bus_handle);
 
