@@ -108,7 +108,7 @@ typedef struct scd4x_s {
 
 extern uint8_t scd41_st_machine_status;
 
-scd4x_t *sensor_create_master(i2c_master_bus_handle_t bus_handle);
+scd4x_t *scd4x_create_master(i2c_master_bus_handle_t bus_handle);
 
 esp_err_t scd4x_device_create(scd4x_t *sensor_ptr);
 

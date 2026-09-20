@@ -76,9 +76,9 @@ esp_err_t scd4x_get_ambient_pressure_verbose(scd4x_t *sensor);
 scd4x_t *scd4x_create_master(i2c_master_bus_handle_t bus_handle)
 {
     scd4x_t *sensor = pvPortMalloc(sizeof(scd4x_t));
-    memset(sensor, 0, sizeof(scd4x_t));
 
     if (sensor != NULL) {
+        memset(sensor, 0, sizeof(scd4x_t));
         sensor->bus_handle = bus_handle;
         sensor->dev_config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
         sensor->temperature_offset = 0.0;
@@ -274,10 +274,10 @@ esp_err_t scd4x_send_command_and_fetch_result(scd4x_t *sensor, uint8_t *command,
 
     err = i2c_master_transmit(sensor->dev_handle, command, 2, CONFIG_SCD4X_TIMEOUT);
     if (err != ESP_OK) return err;
-    err = i2c_master_transmit(sensor->dev_handle, measurements, size, -1);
+    err = i2c_master_transmit(sensor->dev_handle, measurements, size, CONFIG_SCD4X_TIMEOUT);
     if (err != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(wait));
-    return i2c_master_receive(sensor->dev_handle, measurements, size, -1);
+    return i2c_master_receive(sensor->dev_handle, measurements, size, CONFIG_SCD4X_TIMEOUT);
 }
 
 uint16_t scd4x_get_air_parameter(scd4x_t *sensor, uint8_t *command) {
@@ -480,7 +480,7 @@ uint16_t scd4x_perform_forced_recalibration(scd4x_t *sensor, uint16_t target_con
 
     esp_err_t err = scd4x_send_command_and_fetch_result(sensor, perform_forced_recalibration, (uint8_t *)&co2_concentration, sizeof(co2_concentration), 450);
 
-    if (err != ESP_OK || (co2_concentration.value.msb = 0xFF && co2_concentration.value.lsb == 0xFF)) {
+    if (err != ESP_OK || (co2_concentration.value.msb == 0xFF && co2_concentration.value.lsb == 0xFF)) {
         ESP_LOGE(TAG, "perform_forced_recalibration failed with status code: %s", esp_err_to_name(err));
         return SCD4X_READ_ERROR;
     }
@@ -494,7 +494,7 @@ uint16_t scd4x_perform_forced_recalibration(scd4x_t *sensor, uint16_t target_con
 esp_err_t scd4x_set_automatic_self_calibration_enabled(scd4x_t *sensor, bool asc_enabled) {
     scd4x_sensor_value_t automatic_self_calibration = {
         .value = {0x00, asc_enabled ? 0x01 : 0x00},
-        .crc = asc_enabled ? 0xB1 : 0x81
+        .crc = asc_enabled ? 0xB0 : 0x81
     };
 
     return scd4x_write(sensor, set_automatic_self_calibration_enabled, (uint8_t *) &automatic_self_calibration, sizeof(automatic_self_calibration));
@@ -582,7 +582,7 @@ esp_err_t scd4x_get_serial_number(scd4x_t *sensor) {
         vTaskDelay(pdMS_TO_TICKS(50));
     }
     ESP_LOGE(TAG, "scd4x_get_serial_number FAILED with err=%d", err);
-    return SCD4X_READ_ERROR;
+    return ESP_FAIL;
 }
 
 /*
